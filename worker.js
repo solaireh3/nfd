@@ -83,7 +83,7 @@ async function onMessage (message) {
     if(!message?.reply_to_message?.chat){
       return sendMessage({
         chat_id:ADMIN_UID,
-        text:'使用方法，回复转发的消息，并发送回复消息，或者`/block`、`/unblock`、`/checkblock`、`/info`等指令'
+        text:'使用方法：回复某条转发的消息，再输入 `/block`、`/unblock`、`/checkblock`、`/info` 等指令'
       })
     }
     if(/^\/block$/.exec(message.text)){
@@ -96,15 +96,21 @@ async function onMessage (message) {
       return checkBlock(message)
     }
     if(/^\/info$/.exec(message.text)){
-      let guestChatId = await nfd.get('msg-map-' + message?.reply_to_message.message_id, { type: "json" })
-      let username = await nfd.get('username-' + guestChatId, { type: "json" })
+      let guestChatId = await nfd.get('msg-map-' + message?.reply_to_message.message_id)
+      if (!guestChatId) {
+        return sendMessage({
+          chat_id: ADMIN_UID,
+          text: '未找到对应用户，请确认是在回复转发的消息时输入 /info'
+        })
+      }
+      let username = await nfd.get('username-' + guestChatId)
       let usernameDisplay = username ? '@' + username : '（无用户名）'
       return sendMessage({
         chat_id: ADMIN_UID,
         text: `UID: ${guestChatId}\nUsername: ${usernameDisplay}\nLink: tg://user?id=${guestChatId}`
       })
     }
-    let guestChatId = await nfd.get('msg-map-' + message?.reply_to_message.message_id, { type: "json" })
+    let guestChatId = await nfd.get('msg-map-' + message?.reply_to_message.message_id)
     return copyMessage({
       chat_id: guestChatId,
       from_chat_id: message.chat.id,
@@ -116,12 +122,12 @@ async function onMessage (message) {
 
 async function handleGuestMessage(message){
   let chatId = message.chat.id;
-  let isblocked = await nfd.get('isblocked-' + chatId, { type: "json" })
-  
-  if(isblocked){
+  let isblocked = await nfd.get('isblocked-' + chatId)
+  
+  if(isblocked && isblocked === "true"){
     return sendMessage({
       chat_id: chatId,
-      text:'Your are blocked'
+      text:'You are blocked'
     })
   }
 
@@ -132,7 +138,7 @@ async function handleGuestMessage(message){
   })
   if(forwardReq.ok){
     await nfd.put('msg-map-' + forwardReq.result.message_id, chatId)
-    // 保存用户名（如果有）
+    // 保存或更新用户名
     if (message.from?.username) {
       await nfd.put('username-' + chatId, message.from.username)
     } else {
@@ -147,13 +153,13 @@ async function handleNotify(message){
   if(await isFraud(chatId)){
     return sendMessage({
       chat_id: ADMIN_UID,
-      text:`检测到骗子，UID${chatId}`
+      text:`检测到骗子，UID ${chatId}`
     })
   }
   if(enable_notification){
-    let lastMsgTime = await nfd.get('lastmsg-' + chatId, { type: "json" })
-    if(!lastMsgTime || Date.now() - lastMsgTime > NOTIFY_INTERVAL){
-      await nfd.put('lastmsg-' + chatId, Date.now())
+    let lastMsgTime = await nfd.get('lastmsg-' + chatId)
+    if(!lastMsgTime || Date.now() - parseInt(lastMsgTime) > NOTIFY_INTERVAL){
+      await nfd.put('lastmsg-' + chatId, Date.now().toString())
       return sendMessage({
         chat_id: ADMIN_UID,
         text:await fetch(notificationUrl).then(r => r.text())
@@ -163,35 +169,35 @@ async function handleNotify(message){
 }
 
 async function handleBlock(message){
-  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" })
+  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id)
   if(guestChatId === ADMIN_UID){
     return sendMessage({
       chat_id: ADMIN_UID,
       text:'不能屏蔽自己'
     })
   }
-  await nfd.put('isblocked-' + guestChatId, true)
+  await nfd.put('isblocked-' + guestChatId, "true")
   return sendMessage({
     chat_id: ADMIN_UID,
-    text: `UID:${guestChatId}屏蔽成功`,
+    text: `UID:${guestChatId} 屏蔽成功`,
   })
 }
 
 async function handleUnBlock(message){
-  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" })
-  await nfd.put('isblocked-' + guestChatId, false)
+  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id)
+  await nfd.put('isblocked-' + guestChatId, "false")
   return sendMessage({
     chat_id: ADMIN_UID,
-    text:`UID:${guestChatId}解除屏蔽成功`,
+    text:`UID:${guestChatId} 解除屏蔽成功`,
   })
 }
 
 async function checkBlock(message){
-  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" })
-  let blocked = await nfd.get('isblocked-' + guestChatId, { type: "json" })
+  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id)
+  let blocked = await nfd.get('isblocked-' + guestChatId)
   return sendMessage({
     chat_id: ADMIN_UID,
-    text: `UID:${guestChatId}` + (blocked ? '被屏蔽' : '没有被屏蔽')
+    text: `UID:${guestChatId} ` + (blocked === "true" ? '被屏蔽' : '没有被屏蔽')
   })
 }
 
@@ -214,6 +220,5 @@ async function isFraud(id){
   id = id.toString()
   let db = await fetch(fraudDb).then(r => r.text())
   let arr = db.split('\n').filter(v => v)
-  let flag = arr.includes(id)
-  return flag
+  return arr.includes(id)
 }
