@@ -3,13 +3,15 @@ const WEBHOOK = '/endpoint'
 const SECRET = ENV_BOT_SECRET
 const ADMIN_UID = ENV_ADMIN_UID
 
-const NOTIFY_INTERVAL = 3600 * 1000;
-const fraudDb = 'https://raw.githubusercontent.com/LloydAsp/nfd/main/data/fraud.db';
+const NOTIFY_INTERVAL = 3600 * 1000
+const MAX_MSG_LEN = 4000
+const fraudDb = 'https://raw.githubusercontent.com/LloydAsp/nfd/main/data/fraud.db'
 const notificationUrl = 'https://github.com/solaireh3/nfd/raw/refs/heads/main/data/notification.txt'
-const startMsgUrl = 'https://github.com/solaireh3/nfd/raw/refs/heads/main/data/startMessage.md';
+const startMsgUrl = 'https://github.com/solaireh3/nfd/raw/refs/heads/main/data/startMessage.md'
 
 const enable_notification = true
 
+// =================== 基础函数 ===================
 function apiUrl(methodName, params = null) {
   let query = params ? '?' + new URLSearchParams(params).toString() : ''
   return `https://api.telegram.org/bot${TOKEN}/${methodName}${query}`
@@ -25,8 +27,9 @@ function makeReqBody(body) {
 
 function sendMessage(msg = {}) { return requestTelegram('sendMessage', makeReqBody(msg)) }
 function copyMessage(msg = {}) { return requestTelegram('copyMessage', makeReqBody(msg)) }
-function forwardMessage(msg) { return requestTelegram('forwardMessage', makeReqBody(msg)) }
+function forwardMessage(msg = {}) { return requestTelegram('forwardMessage', makeReqBody(msg)) }
 
+// =================== Worker 监听 ===================
 addEventListener('fetch', event => {
   const url = new URL(event.request.url)
   if (url.pathname === WEBHOOK) event.respondWith(handleWebhook(event))
@@ -43,8 +46,11 @@ async function handleWebhook(event) {
   return new Response('Ok')
 }
 
-async function onUpdate(update) { if ('message' in update) await onMessage(update.message) }
+async function onUpdate(update) {
+  if ('message' in update) await onMessage(update.message)
+}
 
+// =================== 消息处理 ===================
 async function onMessage(message) {
   if (message.text === '/start') {
     let startMsg = await fetch(startMsgUrl).then(r => r.text())
@@ -52,7 +58,6 @@ async function onMessage(message) {
   }
 
   if (message.chat.id.toString() === ADMIN_UID) return handleAdminCommand(message)
-
   return handleGuestMessage(message)
 }
 
@@ -72,9 +77,9 @@ async function handleAdminCommand(message) {
   if (/^\/history(\s+(\d+))?$/.exec(message.text)) return handleHistory(message, guestChatId)
   if (/^\/contact\s+(\d+)\s+(.+)$/.exec(message.text)) return handleContact(message)
 
-  // 普通回复转发消息
   if (guestChatId) return copyMessage({ chat_id: guestChatId, from_chat_id: message.chat.id, message_id: message.message_id })
 }
+
 
 // =================== /info 命令 ===================
 async function handleInfo(message, guestChatId) {
@@ -107,7 +112,6 @@ async function handleList(message) {
 
   return sendMessage({ chat_id: ADMIN_UID, text: result.join('\n') })
 }
-
 // =================== /history ===================
 async function handleHistory(message, guestChatIdFromReply) {
   let uid = guestChatIdFromReply
@@ -135,8 +139,7 @@ async function handleHistory(message, guestChatIdFromReply) {
   if (text) await sendMessage({ chat_id: ADMIN_UID, parse_mode: 'MarkdownV2', text })
 }
 
-
-// =================== /contact UID 内容 ===================
+// =================== /contact ===================
 async function handleContact(message) {
   let match = message.text.match(/^\/contact\s+(\d+)\s+(.+)$/)
   if (!match) return
@@ -151,18 +154,17 @@ async function handleGuestMessage(message) {
   let isblocked = await nfd.get('isblocked-' + chatId)
   if (isblocked === 'true') return sendMessage({ chat_id, text: 'You are blocked' })
 
-  // 保存或更新用户名
   if (message.from?.username) await nfd.put('username-' + chatId, message.from.username)
   await nfd.put('lastmsg-' + chatId, Date.now().toString())
+  await nfd.put('lastmsgText-' + chatId, message.text || '[非文本消息]')
 
-  // 保存聊天记录
   let historyKey = 'history-' + chatId
   let prev = await nfd.get(historyKey) || '[]'
-  let arr = JSON.parse(prev)
+  let arr
+  try { arr = JSON.parse(prev) } catch(e) { arr = [] }
   arr.push({ text: message.text || '[非文本消息]', time: Date.now() })
   await nfd.put(historyKey, JSON.stringify(arr))
 
-  // 转发给管理员
   let forwardReq = await forwardMessage({ chat_id: ADMIN_UID, from_chat_id: chatId, message_id: message.message_id })
   if (forwardReq.ok) await nfd.put('msg-map-' + forwardReq.result.message_id, chatId)
 
@@ -182,7 +184,7 @@ async function handleNotify(message) {
   }
 }
 
-// =================== Block / Unblock ===================
+// =================== block / unblock / check ===================
 async function handleBlock(message) {
   let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id)
   if (guestChatId === ADMIN_UID) return sendMessage({ chat_id: ADMIN_UID, text: '不能屏蔽自己' })
@@ -199,13 +201,28 @@ async function handleUnBlock(message) {
 async function checkBlock(message) {
   let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id)
   let blocked = await nfd.get('isblocked-' + guestChatId)
-  return sendMessage({ chat_id: ADMIN_UID, text: `UID:${guestChatId} ` + (blocked === 'true' ? '被屏蔽' : '没有被屏蔽') })
+  return sendMessage({
+    chat_id: ADMIN_UID,
+    text: `UID:${guestChatId} ` + (blocked === 'true' ? '被屏蔽' : '没有被屏蔽')
+  })
 }
 
-// =================== isFraud ===================
+// =================== 防诈骗 ===================
 async function isFraud(id) {
   id = id.toString()
   let db = await fetch(fraudDb).then(r => r.text())
   let arr = db.split('\n').filter(v => v)
   return arr.includes(id)
+}
+
+// =================== webhook 注册 ===================
+async function registerWebhook(event, requestUrl, suffix, secret) {
+  const webhookUrl = `${requestUrl.protocol}//${requestUrl.hostname}${suffix}`
+  const r = await (await fetch(apiUrl('setWebhook', { url: webhookUrl, secret_token: secret }))).json()
+  return new Response(r.ok ? 'Ok' : JSON.stringify(r, null, 2))
+}
+
+async function unRegisterWebhook(event) {
+  const r = await (await fetch(apiUrl('setWebhook', { url: '' }))).json()
+  return new Response(r.ok ? 'Ok' : JSON.stringify(r, null, 2))
 }
