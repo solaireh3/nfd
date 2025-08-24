@@ -96,24 +96,104 @@ async function handleInfo(message, guestChatId) {
 
 // =================== /list ===================
 async function handleList(message) {
-  let keys = await nfd.list({ prefix: 'username-' })
-  if (keys.keys.length === 0) return sendMessage({ chat_id: ADMIN_UID, text: '暂无用户记录' })
-
-  let result = []
-  for (let k of keys.keys) {
-    let uid = k.name.replace('username-', '')
-    let username = await nfd.get(k.name) || '无'
-
-    let historyStr = await nfd.get('history-' + uid) || '[]'
-    let arr = JSON.parse(historyStr)
-    let lastMsg = arr.length > 0 ? arr[arr.length - 1] : null
-    let lastTimeStr = lastMsg ? new Date(lastMsg.time).toLocaleString('zh-CN') : '无'
-    let lastMsgText = lastMsg ? lastMsg.text.replace(/`/g,'\\`') : '无'
-
-    result.push(`*UID:* \`${uid}\`\nUsername: ${username}\n最后消息时间: ${lastTimeStr}\n最后消息: \`${lastMsgText}\`\n---`)
+  try {
+    // 发送"正在处理"消息
+    const processingMsg = await sendMessage({ 
+      chat_id: ADMIN_UID, 
+      text: "正在获取用户列表，请稍候..." 
+    });
+    
+    // 获取所有用户数据
+    let users = [];
+    let cursor = null;
+    
+    do {
+      const listResult = await nfd.list({ prefix: 'username-', cursor, limit: 1000 });
+      
+      if (!listResult.keys || listResult.keys.length === 0) {
+        break;
+      }
+      
+      for (let key of listResult.keys) {
+        const uid = key.name.replace('username-', '');
+        const username = await nfd.get(key.name);
+        
+        // 获取最后消息和时间
+        const lastMsg = await nfd.get('lastmsgText-' + uid) || '(无记录)';
+        const lastTime = await nfd.get('lastmsg-' + uid);
+        const lastTimeStr = lastTime ? new Date(parseInt(lastTime)).toLocaleString('zh-CN') : '未知';
+        
+        users.push({
+          uid,
+          username: username || '(无用户名)',
+          lastMsg,
+          lastTime: lastTimeStr
+        });
+      }
+      
+      cursor = listResult.cursor;
+      // 防止无限循环
+      if (users.length > 1000) break;
+    } while (cursor);
+    
+    // 删除"正在处理"消息
+    if (processingMsg.ok) {
+      await requestTelegram('deleteMessage', null, {
+        chat_id: ADMIN_UID,
+        message_id: processingMsg.result.message_id
+      });
+    }
+    
+    if (users.length === 0) {
+      return sendMessage({ 
+        chat_id: ADMIN_UID, 
+        text: '暂无用户记录。请确保:\n1. 用户已发送消息给机器人\n2. KV存储已正确配置' 
+      });
+    }
+    
+    // 按最后消息时间排序
+    users.sort((a, b) => {
+      const timeA = a.lastTime === '未知' ? 0 : new Date(a.lastTime.replace(/\//g, '-')).getTime();
+      const timeB = b.lastTime === '未知' ? 0 : new Date(b.lastTime.replace(/\//g, '-')).getTime();
+      return timeB - timeA;
+    });
+    
+    // 构建消息内容
+    let messageText = "用户列表:\n\n";
+    
+    for (let i = 0; i < users.length; i++) {
+      const user = users[i];
+      const userEntry = `UID: \`${user.uid}\`\nUsername: @${user.username}\n最后消息时间: ${user.lastTime}\n最后的消息：\`${user.lastMsg}\`\n---\n`;
+      
+      // 如果添加这个用户后消息会超过限制，先发送当前消息
+      if ((messageText + userEntry).length > MAX_MSG_LEN) {
+        await sendMessage({ 
+          chat_id: ADMIN_UID, 
+          text: messageText,
+          parse_mode: 'MarkdownV2'
+        });
+        messageText = userEntry;
+      } else {
+        messageText += userEntry;
+      }
+    }
+    
+    // 发送剩余的消息
+    if (messageText.length > 0) {
+      await sendMessage({ 
+        chat_id: ADMIN_UID, 
+        text: messageText,
+        parse_mode: 'MarkdownV2'
+      });
+    }
+    
+  } catch (error) {
+    console.error('处理 /list 命令时出错:', error);
+    return sendMessage({ 
+      chat_id: ADMIN_UID, 
+      text: `获取用户列表时出错: ${error.message}` 
+    });
   }
-
-  return sendMessage({ chat_id: ADMIN_UID, parse_mode: 'MarkdownV2', text: result.join('\n') })
 }
 
 // =================== /history ===================
@@ -125,7 +205,9 @@ async function handleHistory(message, guestChatIdFromReply) {
   if (!uid) return sendMessage({ chat_id: ADMIN_UID, text: '请回复转发消息或输入 /history UID' })
 
   let historyStr = await nfd.get('history-' + uid) || '[]'
-  let arr = JSON.parse(historyStr)
+  let arr
+  try { arr = JSON.parse(historyStr) } catch(e) { arr = [] }
+
   if (arr.length === 0) return sendMessage({ chat_id: ADMIN_UID, text: '没有聊天记录' })
 
   let text = ''
@@ -158,10 +240,12 @@ async function handleGuestMessage(message) {
 
   if (message.from?.username) await nfd.put('username-' + chatId, message.from.username)
   await nfd.put('lastmsg-' + chatId, Date.now().toString())
+  await nfd.put('lastmsgText-' + chatId, message.text || '[非文本消息]')
 
   let historyKey = 'history-' + chatId
   let prev = await nfd.get(historyKey) || '[]'
-  let arr = JSON.parse(prev)
+  let arr
+  try { arr = JSON.parse(prev) } catch(e) { arr = [] }
   arr.push({ text: message.text || '[非文本消息]', time: Date.now() })
   await nfd.put(historyKey, JSON.stringify(arr))
 
@@ -201,7 +285,10 @@ async function handleUnBlock(message) {
 async function checkBlock(message) {
   let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id)
   let blocked = await nfd.get('isblocked-' + guestChatId)
-  return sendMessage({ chat_id: ADMIN_UID, text: `UID:${guestChatId} ` + (blocked === 'true' ? '被屏蔽' : '没有被屏蔽') })
+  return sendMessage({
+    chat_id: ADMIN_UID,
+    text: `UID:${guestChatId} ` + (blocked === 'true' ? '被屏蔽' : '没有被屏蔽')
+  })
 }
 
 // =================== 防诈骗 ===================
