@@ -87,10 +87,13 @@ async function handleInfo(message, guestChatId) {
   let username = await nfd.get('username-' + guestChatId)
   let usernameDisplay = username ? '@' + username : '（无用户名）'
 
+  // 转义 MarkdownV2 特殊字符
+  const escapedUsername = usernameDisplay.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1')
+  
   return sendMessage({
     chat_id: ADMIN_UID,
     parse_mode: 'MarkdownV2',
-    text: `*UID:* \`${guestChatId}\`\n*Username:* ${usernameDisplay}\n*Link:* [点击跳转](tg://user?id=${guestChatId})`
+    text: `*UID\\:* \`${guestChatId}\`\n*Username\\:* ${escapedUsername}\n*Link\\:* [点击跳转](tg://user?id=${guestChatId})`
   })
 }
 
@@ -127,7 +130,8 @@ async function handleList(message) {
           uid,
           username: username || '(无用户名)',
           lastMsg,
-          lastTime: lastTimeStr
+          lastTime: lastTimeStr,
+          timestamp: lastTime ? parseInt(lastTime) : 0 // 添加时间戳用于排序
         });
       }
       
@@ -151,19 +155,17 @@ async function handleList(message) {
       });
     }
     
-    // 按最后消息时间排序
-    users.sort((a, b) => {
-      const timeA = a.lastTime === '未知' ? 0 : new Date(a.lastTime.replace(/\//g, '-')).getTime();
-      const timeB = b.lastTime === '未知' ? 0 : new Date(b.lastTime.replace(/\//g, '-')).getTime();
-      return timeB - timeA;
-    });
+    // 按最后消息时间排序 - 修复排序方法
+    users.sort((a, b) => b.timestamp - a.timestamp);
     
     // 构建消息内容
     let messageText = "用户列表:\n\n";
     
     for (let i = 0; i < users.length; i++) {
       const user = users[i];
-      const userEntry = `UID: \`${user.uid}\`\nUsername: @${user.username}\n最后消息时间: ${user.lastTime}\n最后的消息：\`${user.lastMsg}\`\n---\n`;
+      // 转义Markdown特殊字符
+      const escapedLastMsg = user.lastMsg.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+      const userEntry = `UID: \`${user.uid}\`\nUsername: @${user.username}\n最后消息时间: ${user.lastTime}\n最后的消息：\`${escapedLastMsg}\`\n---\n`;
       
       // 如果添加这个用户后消息会超过限制，先发送当前消息
       if ((messageText + userEntry).length > MAX_MSG_LEN) {
