@@ -76,29 +76,20 @@ async function handleAdminCommand(message) {
   if (guestChatId) return copyMessage({ chat_id: guestChatId, from_chat_id: message.chat.id, message_id: message.message_id })
 }
 
-// =================== /info ===================
+// =================== /info 命令 ===================
 async function handleInfo(message, guestChatId) {
-  console.log('INFO command received', { guestChatId })
-  
-  if (!guestChatId) {
-    console.log('No guestChatId found')
+  if (!guestChatId) 
     return sendMessage({ chat_id: ADMIN_UID, text: '请回复转发消息输入 /info' })
-  }
 
   let username = await nfd.get('username-' + guestChatId)
-  console.log('Retrieved username:', username)
-  
   let usernameDisplay = username ? '@' + username : '（无用户名）'
-  
-  const infoText = `*UID:* \`${guestChatId}\`\n*Username:* ${usernameDisplay}\n*Link:* tg://user?id=${guestChatId}`
-  console.log('Sending info text:', infoText)
-  
+
   return sendMessage({
     chat_id: ADMIN_UID,
-    parse_mode: 'MarkdownV2',
-    text: infoText
+    text: `UID: ${guestChatId}\nUsername: ${usernameDisplay}\nLink: tg://user?id=${guestChatId}`
   })
 }
+
 
 // =================== /list 命令 ===================
 async function handleList(message) {
