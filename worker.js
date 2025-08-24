@@ -9,9 +9,7 @@ const notificationUrl = 'https://github.com/solaireh3/nfd/raw/refs/heads/main/da
 const startMsgUrl = 'https://github.com/solaireh3/nfd/raw/refs/heads/main/data/startMessage.md';
 
 const enable_notification = true
-/**
- * Return url to telegram api, optionally with parameters added
- */
+
 function apiUrl (methodName, params = null) {
   let query = ''
   if (params) {
@@ -21,16 +19,13 @@ function apiUrl (methodName, params = null) {
 }
 
 function requestTelegram(methodName, body, params = null){
-  return fetch(apiUrl(methodName, params), body)
-    .then(r => r.json())
+  return fetch(apiUrl(methodName, params), body).then(r => r.json())
 }
 
 function makeReqBody(body){
   return {
     method:'POST',
-    headers:{
-      'content-type':'application/json'
-    },
+    headers:{ 'content-type':'application/json' },
     body:JSON.stringify(body)
   }
 }
@@ -47,9 +42,6 @@ function forwardMessage(msg){
   return requestTelegram('forwardMessage', makeReqBody(msg))
 }
 
-/**
- * Wait for requests to the worker
- */
 addEventListener('fetch', event => {
   const url = new URL(event.request.url)
   if (url.pathname === WEBHOOK) {
@@ -63,38 +55,20 @@ addEventListener('fetch', event => {
   }
 })
 
-/**
- * Handle requests to WEBHOOK
- * https://core.telegram.org/bots/api#update
- */
 async function handleWebhook (event) {
-  // Check secret
   if (event.request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== SECRET) {
     return new Response('Unauthorized', { status: 403 })
   }
-
-  // Read request body synchronously
   const update = await event.request.json()
-  // Deal with response asynchronously
   event.waitUntil(onUpdate(update))
-
   return new Response('Ok')
 }
 
-/**
- * Handle incoming Update
- * https://core.telegram.org/bots/api#update
- */
 async function onUpdate (update) {
   if ('message' in update) {
     await onMessage(update.message)
   }
 }
-
-/**
- * Handle incoming Message
- * https://core.telegram.org/bots/api#message
- */
 
 async function onMessage (message) {
   if(message.text === '/start'){
@@ -122,16 +96,17 @@ async function onMessage (message) {
       return checkBlock(message)
     }
     if(/^\/info$/.exec(message.text)){
-      // 处理 /info 命令
-      let guestChantId = await nfd.get('msg-map-' + message?.reply_to_message.message_id, { type: "json" })
+      let guestChatId = await nfd.get('msg-map-' + message?.reply_to_message.message_id, { type: "json" })
+      let username = await nfd.get('username-' + guestChatId, { type: "json" })
+      let usernameDisplay = username ? '@' + username : '（无用户名）'
       return sendMessage({
         chat_id: ADMIN_UID,
-        text: `tg://user?id=${guestChantId}`
+        text: `UID: ${guestChatId}\nUsername: ${usernameDisplay}\nLink: tg://user?id=${guestChatId}`
       })
     }
-    let guestChantId = await nfd.get('msg-map-' + message?.reply_to_message.message_id, { type: "json" })
+    let guestChatId = await nfd.get('msg-map-' + message?.reply_to_message.message_id, { type: "json" })
     return copyMessage({
-      chat_id: guestChantId,
+      chat_id: guestChatId,
       from_chat_id: message.chat.id,
       message_id: message.message_id,
     })
@@ -142,7 +117,7 @@ async function onMessage (message) {
 async function handleGuestMessage(message){
   let chatId = message.chat.id;
   let isblocked = await nfd.get('isblocked-' + chatId, { type: "json" })
-  
+  
   if(isblocked){
     return sendMessage({
       chat_id: chatId,
@@ -155,16 +130,19 @@ async function handleGuestMessage(message){
     from_chat_id:message.chat.id,
     message_id:message.message_id
   })
-  console.log(JSON.stringify(forwardReq))
   if(forwardReq.ok){
     await nfd.put('msg-map-' + forwardReq.result.message_id, chatId)
+    // 保存用户名（如果有）
+    if (message.from?.username) {
+      await nfd.put('username-' + chatId, message.from.username)
+    } else {
+      await nfd.put('username-' + chatId, "")
+    }
   }
   return handleNotify(message)
 }
 
 async function handleNotify(message){
-  // 先判断是否是诈骗人员，如果是，则直接提醒
-  // 如果不是，则根据时间间隔提醒：用户id，交易注意点等
   let chatId = message.chat.id;
   if(await isFraud(chatId)){
     return sendMessage({
@@ -185,71 +163,48 @@ async function handleNotify(message){
 }
 
 async function handleBlock(message){
-  let guestChantId = await nfd.get('msg-map-' + message.reply_to_message.message_id,
-                                      { type: "json" })
-  if(guestChantId === ADMIN_UID){
+  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" })
+  if(guestChatId === ADMIN_UID){
     return sendMessage({
       chat_id: ADMIN_UID,
       text:'不能屏蔽自己'
     })
   }
-  await nfd.put('isblocked-' + guestChantId, true)
-
+  await nfd.put('isblocked-' + guestChatId, true)
   return sendMessage({
     chat_id: ADMIN_UID,
-    text: `UID:${guestChantId}屏蔽成功`,
+    text: `UID:${guestChatId}屏蔽成功`,
   })
 }
 
 async function handleUnBlock(message){
-  let guestChantId = await nfd.get('msg-map-' + message.reply_to_message.message_id,
-  { type: "json" })
-
-  await nfd.put('isblocked-' + guestChantId, false)
-
+  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" })
+  await nfd.put('isblocked-' + guestChatId, false)
   return sendMessage({
     chat_id: ADMIN_UID,
-    text:`UID:${guestChantId}解除屏蔽成功`,
+    text:`UID:${guestChatId}解除屏蔽成功`,
   })
 }
 
 async function checkBlock(message){
-  let guestChantId = await nfd.get('msg-map-' + message.reply_to_message.message_id,
-  { type: "json" })
-  let blocked = await nfd.get('isblocked-' + guestChantId, { type: "json" })
-
+  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" })
+  let blocked = await nfd.get('isblocked-' + guestChatId, { type: "json" })
   return sendMessage({
     chat_id: ADMIN_UID,
-    text: `UID:${guestChantId}` + (blocked ? '被屏蔽' : '没有被屏蔽')
+    text: `UID:${guestChatId}` + (blocked ? '被屏蔽' : '没有被屏蔽')
   })
 }
 
-/**
- * Send plain text message
- * https://core.telegram.org/bots/api#sendmessage
- */
 async function sendPlainText (chatId, text) {
-  return sendMessage({
-    chat_id: chatId,
-    text
-  })
+  return sendMessage({ chat_id: chatId, text })
 }
 
-/**
- * Set webhook to this worker's url
- * https://core.telegram.org/bots/api#setwebhook
- */
 async function registerWebhook (event, requestUrl, suffix, secret) {
-  // https://core.telegram.org/bots/api#setwebhook
   const webhookUrl = `${requestUrl.protocol}//${requestUrl.hostname}${suffix}`
   const r = await (await fetch(apiUrl('setWebhook', { url: webhookUrl, secret_token: secret }))).json()
   return new Response('ok' in r && r.ok ? 'Ok' : JSON.stringify(r, null, 2))
 }
 
-/**
- * Remove webhook
- * https://core.telegram.org/bots/api#setwebhook
- */
 async function unRegisterWebhook (event) {
   const r = await (await fetch(apiUrl('setWebhook', { url: '' }))).json()
   return new Response('ok' in r && r.ok ? 'Ok' : JSON.stringify(r, null, 2))
@@ -259,8 +214,6 @@ async function isFraud(id){
   id = id.toString()
   let db = await fetch(fraudDb).then(r => r.text())
   let arr = db.split('\n').filter(v => v)
-  console.log(JSON.stringify(arr))
-  let flag = arr.filter(v => v === id).length !== 0
-  console.log(flag)
+  let flag = arr.includes(id)
   return flag
 }
