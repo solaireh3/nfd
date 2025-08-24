@@ -104,7 +104,6 @@ async function handleList(message) {
     let uid = k.name.replace('username-', '')
     let username = await nfd.get(k.name) || '无'
 
-    // 获取最后一条消息
     let historyStr = await nfd.get('history-' + uid) || '[]'
     let arr = JSON.parse(historyStr)
     let lastMsg = arr.length > 0 ? arr[arr.length - 1] : null
@@ -180,8 +179,9 @@ async function handleNotify(message) {
 
   let lastMsgTime = await nfd.get('lastmsg-' + chatId)
   if (!lastMsgTime || Date.now() - parseInt(lastMsgTime) > NOTIFY_INTERVAL) {
-     await nfd.put('lastmsg-' + chatId, Date.now().toString())
+    await nfd.put('lastmsg-' + chatId, Date.now().toString())
     return sendMessage({ chat_id: ADMIN_UID, text: await fetch(notificationUrl).then(r => r.text()) })
+  }
 }
 
 // =================== block / unblock / check ===================
