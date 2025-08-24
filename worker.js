@@ -108,7 +108,7 @@ async function handleList(message) {
   return sendMessage({ chat_id: ADMIN_UID, text: result.join('\n') })
 }
 
-// =================== /history 命令 ===================
+// =================== /history ===================
 async function handleHistory(message, guestChatIdFromReply) {
   let uid = guestChatIdFromReply
   const match = message.text.match(/^\/history\s+(\d+)$/)
@@ -117,12 +117,24 @@ async function handleHistory(message, guestChatIdFromReply) {
   if (!uid) return sendMessage({ chat_id: ADMIN_UID, text: '请回复转发消息或输入 /history UID' })
 
   let historyStr = await nfd.get('history-' + uid) || '[]'
-  let arr = JSON.parse(historyStr)
+  let arr
+  try { arr = JSON.parse(historyStr) } catch(e) { arr = [] }
+
   if (arr.length === 0) return sendMessage({ chat_id: ADMIN_UID, text: '没有聊天记录' })
 
-  let text = arr.map(v => `${new Date(v.time).toLocaleString()}: ${v.text}`).join('\n\n')
-  return sendMessage({ chat_id: ADMIN_UID, text })
+  let text = ''
+  for (let v of arr) {
+    let line = `${new Date(v.time).toLocaleString()}\n\`${(v.text || '[非文本消息]').replace(/`/g,'\\`')}\`\n\n`
+    if ((text + line).length > MAX_MSG_LEN) {
+      await sendMessage({ chat_id: ADMIN_UID, parse_mode: 'MarkdownV2', text })
+      text = line
+    } else {
+      text += line
+    }
+  }
+  if (text) await sendMessage({ chat_id: ADMIN_UID, parse_mode: 'MarkdownV2', text })
 }
+
 
 // =================== /contact UID 内容 ===================
 async function handleContact(message) {
