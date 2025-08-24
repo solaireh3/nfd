@@ -86,14 +86,11 @@ async function handleInfo(message, guestChatId) {
 
   let username = await nfd.get('username-' + guestChatId)
   let usernameDisplay = username ? '@' + username : '（无用户名）'
-
-  // 转义 MarkdownV2 特殊字符
-  const escapedUsername = usernameDisplay.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1')
   
   return sendMessage({
     chat_id: ADMIN_UID,
     parse_mode: 'MarkdownV2',
-    text: `*UID\\:* \`${guestChatId}\`\n*Username\\:* ${escapedUsername}\n*Link\\:* [点击跳转](tg://user?id=${guestChatId})`
+    text: `*UID:* \`${guestChatId}\`\n*Username:* ${usernameDisplay}\n*Link:* tg://user?id=${guestChatId}`
   })
 }
 
